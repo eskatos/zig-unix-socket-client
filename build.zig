@@ -1,9 +1,42 @@
 const std = @import("std");
 
+const targets: []const std.Target.Query = &.{
+    .{ .cpu_arch = .aarch64, .os_tag = .macos },
+    .{ .cpu_arch = .x86_64, .os_tag = .macos },
+    .{ .cpu_arch = .aarch64, .os_tag = .linux },
+    .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
+    // .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl },
+    .{ .cpu_arch = .x86_64, .os_tag = .windows },
+    // TODO trying to define win10_rs4 as the minimum supported windows version for UNIX socket support
+    //      currently fails!
+    // .{ .cpu_arch = .x86_64, .os_tag = .windows, .os_version_min = std.Target.Os.WindowsVersion.win10_rs4 },
+};
+
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
+
+    // CUSTOM cross-compilation
+    for (targets) |t| {
+        const exe = b.addExecutable(.{
+            .name = "my-launcher",
+            .root_source_file = b.path("src/main.zig"),
+            .target = b.resolveTargetQuery(t),
+            .optimize = .ReleaseSafe,
+        });
+
+        const target_output = b.addInstallArtifact(exe, .{
+            .dest_dir = .{
+                .override = .{
+                    .custom = try t.zigTriple(b.allocator),
+                },
+            },
+        });
+
+        b.getInstallStep().dependOn(&target_output.step);
+    }
+
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -29,7 +62,7 @@ pub fn build(b: *std.Build) void {
     // This creates another `std.Build.Step.Compile`, but this one builds an executable
     // rather than a static library.
     const exe = b.addExecutable(.{
-        .name = "zig_playground",
+        .name = "my-launcher-debug",
         .root_module = exe_mod,
     });
 
@@ -58,7 +91,7 @@ pub fn build(b: *std.Build) void {
     // This creates a build step. It will be visible in the `zig build --help` menu,
     // and can be selected like this: `zig build run`
     // This will evaluate the `run` step rather than the default, which is "install".
-    const run_step = b.step("run", "Run the app");
+    const run_step = b.step("run", "Run the debug executable");
     run_step.dependOn(&run_cmd.step);
 
     // Creates a step for unit testing. This only builds the test executable
@@ -73,6 +106,6 @@ pub fn build(b: *std.Build) void {
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
-    const test_step = b.step("test", "Run unit tests");
+    const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_unit_tests.step);
 }
