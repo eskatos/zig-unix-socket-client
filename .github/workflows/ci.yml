@@ -9,6 +9,5 @@ jobs:
         with:
           version: 0.14.0
       - run: zig build test --summary all
-      - run: zig build install --summary all
+      - run: zig build release --summary all
       - run: find zig-out/ -type f -exec du -sh {} \;
-      

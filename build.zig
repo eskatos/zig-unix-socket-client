@@ -1,20 +1,20 @@
 const std = @import("std");
 
-const targets: []const std.Target.Query = &.{
-    .{ .cpu_arch = .aarch64, .os_tag = .macos },
-    .{ .cpu_arch = .x86_64, .os_tag = .macos },
-    // .{ .cpu_arch = .aarch64, .os_tag = .linux },
-    .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
-    // .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl },
-    .{ .cpu_arch = .x86_64, .os_tag = .windows, .os_version_min = .{ .windows = .win10_rs4 } },
-};
-
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
 pub fn build(b: *std.Build) !void {
 
-    // CUSTOM cross-compilation
+    // Cross-compiled release
+    const targets: []const std.Target.Query = &.{
+        .{ .cpu_arch = .aarch64, .os_tag = .macos },
+        .{ .cpu_arch = .x86_64, .os_tag = .macos },
+        // .{ .cpu_arch = .aarch64, .os_tag = .linux },
+        .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
+        // .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl },
+        .{ .cpu_arch = .x86_64, .os_tag = .windows, .os_version_min = .{ .windows = .win10_rs4 } },
+    };
+    const release = b.step("release", "Build release executable for all targets");
     for (targets) |t| {
         const exe = b.addExecutable(.{
             .name = "my-launcher",
@@ -31,7 +31,7 @@ pub fn build(b: *std.Build) !void {
             },
         });
 
-        b.getInstallStep().dependOn(&target_output.step);
+        release.dependOn(&target_output.step);
     }
 
     // Standard target options allows the person running `zig build` to choose
