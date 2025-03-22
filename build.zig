@@ -6,10 +6,7 @@ const targets: []const std.Target.Query = &.{
     .{ .cpu_arch = .aarch64, .os_tag = .linux },
     .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
     // .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl },
-    .{ .cpu_arch = .x86_64, .os_tag = .windows },
-    // TODO trying to define win10_rs4 as the minimum supported windows version for UNIX socket support
-    //      currently fails!
-    // .{ .cpu_arch = .x86_64, .os_tag = .windows, .os_version_min = std.Target.Os.WindowsVersion.win10_rs4 },
+    .{ .cpu_arch = .x86_64, .os_tag = .windows, .os_version_min = .{ .windows = .win10_rs4 } },
 };
 
 // Although this function looks imperative, note that its job is to
