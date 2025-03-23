@@ -1,32 +1,65 @@
 const std = @import("std");
 
-pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+const HELLO_MESSAGE = "HELLO\n";
+const READY_MESSAGE = "READY\n";
+const OK_MESSAGE = "OK\n";
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
+pub fn main() !void {
+    var bw = std.io.bufferedWriter(std.io.getStdOut().writer());
     const stdout = bw.writer();
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
-
-    try bw.flush(); // Don't forget to flush!
-
-    // TODO WHAT
-    // try {
-    //   open unix_socket
-    //   syn/ack
-    //   send arguments through socket
-    //   receive result
-    // } catch {
-    //   start server executable passing arguments
-    // }
+    const allocator = std.heap.page_allocator;
 
     const stream = try std.net.connectUnixSocket("/tmp/zig-unix-socket");
     defer stream.close();
+
+    try stdout.print("Connected to server\n", .{});
+    try bw.flush();
+
+    _ = try stream.write(HELLO_MESSAGE);
+
+    try stdout.print("Sent HELLO, waiting for READY...\n", .{});
+    try bw.flush();
+
+    var buffer: [4096]u8 = undefined;
+    _ = std.heap.FixedBufferAllocator.init(&buffer);
+    _ = try stream.readAtLeast(&buffer, READY_MESSAGE.len);
+
+    if (std.mem.startsWith(u8, &buffer, READY_MESSAGE)) {
+        try stdout.print("GOT SERVER READY!\n", .{});
+        try bw.flush();
+
+        var message: []u8 = "";
+        message = try std.mem.concat(allocator, u8, &[_][]const u8{ message, "OPEN" });
+
+        var args_iterator = try std.process.argsWithAllocator(allocator);
+        defer args_iterator.deinit();
+        _ = args_iterator.next(); // Skip executable
+
+        while (args_iterator.next()) |arg| {
+            message = try std.mem.concat(allocator, u8, &[_][]const u8{ message, " ", arg });
+        }
+        message = try std.mem.concat(allocator, u8, &[_][]const u8{ message, "\n" });
+
+        try stdout.print("Sending arguments: {s}\n", .{message});
+        try bw.flush();
+
+        try stream.writeAll(message);
+
+        _ = try stream.readAtLeast(&buffer, OK_MESSAGE.len);
+
+        if (std.mem.startsWith(u8, &buffer, OK_MESSAGE)) {
+            try stdout.print("Server OK'ed arguments\n", .{});
+            try bw.flush();
+            std.process.exit(0);
+        } else {
+            std.debug.print("SERVER REPLIED WITH UNKNOWN OK MESSAGE\n", .{});
+            std.process.exit(1);
+        }
+    } else {
+        std.debug.print("SERVER REPLIED WITH UNKNOWN READY MESSAGE\n", .{});
+        std.process.exit(1);
+    }
 }
 
 // TODO write tests mocking the unix_socket server for fast turnaround
