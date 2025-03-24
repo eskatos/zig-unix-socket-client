@@ -4,7 +4,7 @@ jobs:
   CI:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -12,6 +12,7 @@ jobs:
         with:
           version: 0.14.0
       - run: zig build test --summary all
+      - run: zig build cov --summary all
       - run: zig build release --summary all
         if: runner.os == 'Linux'
       - run: find zig-out/ -type f -exec du -sh {} \;

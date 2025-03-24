@@ -4,23 +4,17 @@ const std = @import("std");
 // declaratively construct a build graph that will be executed by an external
 // runner.
 pub fn build(b: *std.Build) !void {
+    const install_step = b.getInstallStep();
+    const check_step = b.step("check", "Run all checks");
 
     // Cross-compiled release
-    const targets: []const std.Target.Query = &.{
-        .{ .cpu_arch = .aarch64, .os_tag = .macos },
-        .{ .cpu_arch = .x86_64, .os_tag = .macos },
-        // .{ .cpu_arch = .aarch64, .os_tag = .linux },
-        .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
-        // .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl },
-        .{ .cpu_arch = .x86_64, .os_tag = .windows, .os_version_min = .{ .windows = .win10_rs4 } },
-    };
     const release = b.step("release", "Build release executable for all targets");
-    for (targets) |t| {
+    for (TARGETS) |t| {
         const exe = b.addExecutable(.{
             .name = "my-launcher",
             .root_source_file = b.path("src/main.zig"),
             .target = b.resolveTargetQuery(t),
-            .optimize = .ReleaseSafe,
+            .optimize = .ReleaseSmall,
         });
 
         const target_output = b.addInstallArtifact(exe, .{
@@ -77,7 +71,7 @@ pub fn build(b: *std.Build) !void {
     // installation directory rather than directly from within the cache directory.
     // This is not necessary, however, if the application depends on other installed
     // files, this ensures they will be present and in the expected location.
-    main_run_cmd.step.dependOn(b.getInstallStep());
+    main_run_cmd.step.dependOn(install_step);
 
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
@@ -93,16 +87,34 @@ pub fn build(b: *std.Build) !void {
 
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
+    const main_unit_tests = b.addTest(.{ .root_module = main_module });
 
-    const exe_unit_tests = b.addTest(.{
-        .root_module = main_module,
-    });
-
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+    const run_exe_unit_tests = b.addRunArtifact(main_unit_tests);
 
     // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+
+    check_step.dependOn(test_step);
+
+    // Code coverage
+    // TODO this requires kcov on $PATH
+    const cov_run = b.addSystemCommand(&.{ "kcov", "--clean", "--include-pattern=src/", "zig-out/kcov/" });
+    cov_run.addArtifactArg(main_unit_tests);
+
+    const cov_step = b.step("cov", "Generate code coverage");
+    cov_step.dependOn(&cov_run.step);
+
+    check_step.dependOn(cov_step);
 }
+
+const TARGETS: []const std.Target.Query = &.{
+    // .{ .cpu_arch = .aarch64, .os_tag = .macos },
+    // .{ .cpu_arch = .x86_64, .os_tag = .macos },
+    // .{ .cpu_arch = .aarch64, .os_tag = .linux },
+    .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
+    // .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl },
+    .{ .cpu_arch = .x86_64, .os_tag = .windows, .os_version_min = .{ .windows = .win10_rs4 } },
+};
