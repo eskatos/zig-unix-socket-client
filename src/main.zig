@@ -37,6 +37,23 @@ pub fn main() !void {
                 defer allocator.free(instance_exe_path);
                 std.debug.print("Instance executable at {s}.\n", .{instance_exe_path});
 
+                // Build instance ARGV
+                const args = try std.process.argsAlloc(allocator);
+                defer allocator.free(args);
+                var argv_list = std.ArrayList([]u8).init(allocator);
+                defer argv_list.deinit();
+                try argv_list.append(instance_exe_path);
+                try argv_list.appendSlice(args[1..]);
+
+                // Spawn instance
+                var child = std.process.Child.init(argv_list.items, allocator);
+                child.stdin_behavior = .Ignore;
+                child.stdout_behavior = .Ignore;
+                child.stderr_behavior = .Ignore;
+                try child.spawn();
+                try child.waitForSpawn();
+                std.debug.print("Instance spawned!\n", .{});
+
                 // Exit
                 std.process.exit(0);
             },

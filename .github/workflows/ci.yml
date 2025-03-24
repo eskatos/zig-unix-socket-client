@@ -8,12 +8,20 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        name: Clone Repository
+
       - uses: mlugg/setup-zig@v1.2.1
+        name: Setup Zig
         with:
           version: 0.14.0
+
       - run: zig build test --summary all
-      - run: zig build cov --summary all
+        name: Test
+
       - run: zig build release --summary all
         if: runner.os == 'Linux'
+        name: Build Release
+
       - run: find zig-out/ -type f -exec du -sh {} \;
         if: runner.os == 'Linux'
+        name: Executable Size
