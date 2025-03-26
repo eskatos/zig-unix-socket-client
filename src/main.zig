@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const debug = builtin.mode == std.builtin.Mode.Debug;
 
 // Launcher for single instance application
 //
@@ -38,13 +39,13 @@ pub fn main() !void {
         // Locate UNIX socket
         const socket_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", AF_SOCKET_NAME });
         defer allocator.free(socket_path);
-        std.debug.print("UNIX socket at {s}.\n", .{socket_path});
+        if (debug) std.debug.print("UNIX socket at {s}.\n", .{socket_path});
 
         // Open UNIX socket
         const stream = std.net.connectUnixSocket(socket_path) catch |err| switch (err) {
             else => {
                 // FAILED, start instance
-                std.debug.print("Can't connect to UNIX socket, starting the instance\n", .{});
+                if (debug) std.debug.print("Can't connect to UNIX socket, starting the instance\n", .{});
                 try runInstanceExecutable(allocator, self_exe_dir);
                 std.process.exit(0);
             },
@@ -52,10 +53,7 @@ pub fn main() !void {
         defer stream.close();
 
         // UNIX socket SUCCESS, we are the client
-        std.debug.print("Connected to server\n", .{});
-
-        // const args = try std.process.argsAlloc(allocator);
-        // defer std.process.argsFree(allocator, args);
+        if (debug) std.debug.print("Connected to server\n", .{});
 
         var args_list = std.ArrayList([]const u8).init(allocator);
         defer args_list.deinit();
@@ -80,11 +78,11 @@ fn runInstanceExecutable(allocator: std.mem.Allocator, self_exe_dir: []const u8)
     const executable_name = if (comptime builtin.target.os.tag == .windows) INSTANCE_EXECUTABLE_WINDOWS_NAME else INSTANCE_EXECUTABLE_UNIX_NAME;
     const instance_exe_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", executable_name });
     defer allocator.free(instance_exe_path);
-    std.debug.print("Instance executable at {s}.\n", .{instance_exe_path});
+    if (debug) std.debug.print("Instance executable at {s}.\n", .{instance_exe_path});
 
     // Build instance ARGV
     const args = try std.process.argsAlloc(allocator);
-    defer allocator.free(args);
+    defer std.process.argsFree(allocator, args);
     var argv_list = std.ArrayList([]u8).init(allocator);
     defer argv_list.deinit();
     try argv_list.append(instance_exe_path);
@@ -99,7 +97,7 @@ fn runInstanceExecutable(allocator: std.mem.Allocator, self_exe_dir: []const u8)
     try child.waitForSpawn();
     const argv_debug = try std.mem.join(allocator, " ", argv_list.items);
     defer allocator.free(argv_debug);
-    std.debug.print("Instance spawned! {s}\n", .{argv_debug});
+    if (debug) std.debug.print("Instance spawned! {s}\n", .{argv_debug});
 }
 
 fn sendArgumentsToRunningInstance(allocator: std.mem.Allocator, args: [][]const u8, stream: std.net.Stream) !void {
@@ -107,7 +105,7 @@ fn sendArgumentsToRunningInstance(allocator: std.mem.Allocator, args: [][]const 
     // HELLO
     const hello_json = try std.json.stringifyAlloc(allocator, HelloMessage{}, .{});
     defer allocator.free(hello_json);
-    std.debug.print("Sending {s}\n", .{hello_json});
+    if (debug) std.debug.print("Sending {s}\n", .{hello_json});
 
     _ = try stream.writeAll(hello_json);
     _ = try stream.writeAll(TERMINATOR_STRING);
@@ -115,31 +113,29 @@ fn sendArgumentsToRunningInstance(allocator: std.mem.Allocator, args: [][]const 
     // READY
     const ready_json = try std.json.stringifyAlloc(allocator, ReadyMessage{}, .{});
     defer allocator.free(ready_json);
-    std.debug.print("Waiting for {s}\n", .{ready_json});
+    if (debug) std.debug.print("Waiting for {s}\n", .{ready_json});
 
     const ready_server = try stream.reader().readUntilDelimiterAlloc(allocator, TERMINATOR_CHAR, JSON_MAX_SIZE);
     defer allocator.free(ready_server);
 
     if (std.mem.eql(u8, ready_server, ready_json)) {
-        std.debug.print("SERVER READY!\n", .{});
+        if (debug) std.debug.print("SERVER READY!\n", .{});
 
         // ARGUMENTS
         const args_json = try std.json.stringifyAlloc(allocator, ArgsMessage{ .args = args }, .{});
         defer allocator.free(args_json);
-        std.debug.print("Sending {s}\n", .{args_json});
-
+        if (debug) std.debug.print("Sending {s}\n", .{args_json});
         _ = try stream.writeAll(args_json);
         _ = try stream.writeAll(TERMINATOR_STRING);
 
         // OK
         const ok_json = try std.json.stringifyAlloc(allocator, OkMessage{}, .{});
         defer allocator.free(ok_json);
-        std.debug.print("Waiting for {s}\n", .{ok_json});
-
+        if (debug) std.debug.print("Waiting for {s}\n", .{ok_json});
         const ok_server = try stream.reader().readUntilDelimiterAlloc(allocator, TERMINATOR_CHAR, JSON_MAX_SIZE);
         defer allocator.free(ok_server);
         if (std.mem.eql(u8, ok_server, ok_json)) {
-            std.debug.print("Server OK'ed arguments\n", .{});
+            if (debug) std.debug.print("Server OK'ed arguments\n", .{});
             std.process.exit(0);
         } else {
             std.debug.print("ERROR Server replied with unknown OK message, aborting\n", .{});
