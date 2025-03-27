@@ -175,21 +175,23 @@ test "integration test" {
         else => {},
     };
 
-    // Start Recording Server in separate Thread
+    // Init shared mutable state
     var server_state: TestServerState = TestServerState.init(allocator);
     defer server_state.deinit();
-    try std.testing.expect(!server_state.listening);
     try std.testing.expect(server_state.received_messages.items.len == 0);
+
+    // Start Recording Server in separate Thread
     const server_thread = try std.Thread.spawn(.{ .allocator = allocator }, startTestServer, .{ allocator, unix_socket_path, &server_state });
     defer server_thread.detach();
+    server_state.wait_group.start();
 
     // Wait for listening
-    std.time.sleep(std.time.ns_per_s);
-    try std.testing.expect(server_state.listening);
+    server_state.wait_group.wait();
 
     // Test Client
     const stream = try std.net.connectUnixSocket(unix_socket_path);
     defer stream.close();
+    server_state.wait_group.start();
 
     // Send Arguments
     var args_list = std.ArrayList([]const u8).init(allocator);
@@ -201,7 +203,7 @@ test "integration test" {
     try sendArgumentsToRunningInstance(allocator, args, stream);
 
     // Wait for exchange termination
-    std.time.sleep(std.time.ns_per_s);
+    server_state.wait_group.wait();
 
     // Expect server received messages
     std.debug.print("Test server received {x} message(s)\n", .{server_state.received_messages.items.len});
@@ -209,34 +211,24 @@ test "integration test" {
     const args_json = try std.json.stringifyAlloc(allocator, ArgsMessage{ .args = args }, .{});
     defer allocator.free(args_json);
     try std.testing.expect(std.mem.eql(u8, server_state.received_messages.items[1], args_json));
-
-    // Expect server stopped listening
-    try std.testing.expect(!server_state.listening);
 }
 
 const TestServerState = struct {
+    wait_group: std.Thread.WaitGroup,
     received_messages: std.ArrayList([]const u8),
-    listening: bool,
-    const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(allocator: std.mem.Allocator) TestServerState {
+        var wg: std.Thread.WaitGroup = undefined;
+        wg.reset();
         const list = std.ArrayList([]const u8).init(allocator);
-        return .{ .received_messages = list, .listening = false };
+        return .{ .wait_group = wg, .received_messages = list };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *TestServerState) void {
         self.received_messages.deinit();
     }
 
-    pub fn startListening(self: *Self) void {
-        self.listening = true;
-    }
-
-    pub fn stopListener(self: *Self) void {
-        self.listening = false;
-    }
-
-    pub fn appendMessage(self: *Self, message: []const u8) !void {
+    pub fn appendMessage(self: *TestServerState, message: []const u8) !void {
         try self.received_messages.append(message);
     }
 };
@@ -248,11 +240,15 @@ fn startTestServer(allocator: std.mem.Allocator, unix_socket_path: []u8, server_
     const address = try std.net.Address.initUnix(unix_socket_path);
     var server = try address.listen(std.net.Address.ListenOptions{});
     defer server.deinit();
-    std.debug.print("Test server accepting incoming connections\n", .{});
-    server_state.startListening();
 
+    // Server is listening
+    std.debug.print("Test server accepting incoming connections\n", .{});
+    server_state.wait_group.finish();
+
+    // Wait for client
     const connection = try server.accept();
 
+    // Server receives HELLO
     const hello_message = try connection.stream.reader().readUntilDelimiterAlloc(allocator, TERMINATOR_CHAR, JSON_MAX_SIZE);
     std.debug.print("Server received: {s}\n", .{hello_message});
     try server_state.appendMessage(hello_message);
@@ -263,21 +259,24 @@ fn startTestServer(allocator: std.mem.Allocator, unix_socket_path: []u8, server_
     if (std.mem.eql(u8, hello_message, hello_json)) {
         std.debug.print("Server got {s}", .{hello_message});
 
+        // Server sends READY
         const ready_json = try std.json.stringifyAlloc(allocator, ReadyMessage{}, .{});
         defer allocator.free(ready_json);
         _ = try connection.stream.writeAll(ready_json);
         _ = try connection.stream.writeAll(TERMINATOR_STRING);
 
+        // Server receives ARGUMENTS
         const args_message = try connection.stream.reader().readUntilDelimiterAlloc(allocator, TERMINATOR_CHAR, JSON_MAX_SIZE);
         std.debug.print("Server received: {s}\n", .{args_message});
         try server_state.appendMessage(args_message);
 
+        // Server sends OK
         const ok_json = try std.json.stringifyAlloc(allocator, OkMessage{}, .{});
         defer allocator.free(ok_json);
         _ = try connection.stream.writeAll(ok_json);
         _ = try connection.stream.writeAll(TERMINATOR_STRING);
     } else {
         std.debug.print("Server expected HELLO, received garbage", .{});
-        std.process.exit(1);
     }
+    server_state.wait_group.finish();
 }
