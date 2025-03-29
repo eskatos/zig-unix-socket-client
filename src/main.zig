@@ -20,7 +20,7 @@ const debug = builtin.mode == std.builtin.Mode.Debug;
 
 const HelloMessage = struct { msg: []const u8 = "HELLO" };
 const ReadyMessage = struct { msg: []const u8 = "READY" };
-const ArgsMessage = struct { args: [][]const u8 };
+const ArgsMessage = struct { args: [][]u8 };
 const OkMessage = struct { msg: []const u8 = "OK" };
 
 const TERMINATOR_CHAR: u8 = '\u{000A}';
@@ -31,12 +31,37 @@ const AF_SOCKET_NAME = "instance.lock";
 const INSTANCE_EXECUTABLE_UNIX_NAME = "target-executable";
 const INSTANCE_EXECUTABLE_WINDOWS_NAME = "target-executable.exe";
 
-const PathInfo = struct {
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    var path_info: EnvInfo = try EnvInfo.init(allocator);
+    defer path_info.deinit();
+    try path_info.debugPrint();
+
+    // Try connecting to the instance
+    const stream = std.net.connectUnixSocket(path_info.socket_path) catch |err| switch (err) {
+        else => {
+            // Start instance
+            if (debug) std.debug.print("Can't connect to UNIX socket, starting the instance\n", .{});
+            try runInstanceExecutable(allocator, path_info.instance_exe_path, path_info.args);
+            std.process.exit(0);
+        },
+    };
+    defer stream.close();
+
+    // We are the client
+    if (debug) std.debug.print("Connected to server\n", .{});
+    try sendArgumentsToRunningInstance(allocator, path_info.args, stream);
+}
+
+const EnvInfo = struct {
     allocator: std.mem.Allocator,
     socket_path: []u8,
     instance_exe_path: []u8,
+    args: [][]u8,
 
-    pub fn init(allocator: std.mem.Allocator) !PathInfo {
+    pub fn init(allocator: std.mem.Allocator) !EnvInfo {
         const self_exe_path = try std.fs.selfExePathAlloc(allocator);
         defer allocator.free(self_exe_path);
         const self_exe_dir = std.fs.path.dirname(self_exe_path).?;
@@ -45,67 +70,41 @@ const PathInfo = struct {
         // Locate instance executable
         const executable_name = if (comptime builtin.target.os.tag == .windows) INSTANCE_EXECUTABLE_WINDOWS_NAME else INSTANCE_EXECUTABLE_UNIX_NAME;
         const instance_exe_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", executable_name });
-        return .{ .allocator = allocator, .socket_path = socket_path, .instance_exe_path = instance_exe_path };
+        // Gather arguments
+        var args_list = std.ArrayList([]u8).init(allocator);
+        var args_iterator = try std.process.argsWithAllocator(allocator);
+        defer args_iterator.deinit();
+        _ = args_iterator.next(); // Skip executable
+        while (args_iterator.next()) |arg| {
+            const copy = try std.fmt.allocPrint(allocator, "{s}", .{arg});
+            try args_list.append(copy);
+        }
+        return .{ .allocator = allocator, .socket_path = socket_path, .instance_exe_path = instance_exe_path, .args = args_list.items };
     }
 
-    pub fn deinit(self: *PathInfo) void {
+    pub fn deinit(self: *EnvInfo) void {
         self.allocator.free(self.socket_path);
         self.allocator.free(self.instance_exe_path);
+        self.allocator.free(self.args);
     }
 
-    pub fn debugPrint(self: *PathInfo) void {
+    pub fn debugPrint(self: *EnvInfo) !void {
         if (debug) {
-            std.debug.print("PathInfo(socket_path = '{s}', instance_exe_path = '{s}')\n", .{ self.socket_path, self.instance_exe_path });
+            const args_string = try std.mem.join(self.allocator, " ", self.args);
+            std.debug.print("EnvInfo(\n  socket_path = {s},\n  instance_exe_path = {s},\n  args = {s}\n)\n", .{ self.socket_path, self.instance_exe_path, args_string });
         }
     }
 };
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
+fn runInstanceExecutable(allocator: std.mem.Allocator, instance_exe_path: []u8, args: [][]u8) !void {
 
-    var path_info: PathInfo = try PathInfo.init(allocator);
-    defer path_info.deinit();
-    path_info.debugPrint();
-
-    // Open UNIX socket
-    const stream = std.net.connectUnixSocket(path_info.socket_path) catch |err| switch (err) {
-        else => {
-            // FAILED, start instance
-            if (debug) std.debug.print("Can't connect to UNIX socket, starting the instance\n", .{});
-            try runInstanceExecutable(allocator, path_info.instance_exe_path);
-            std.process.exit(0);
-        },
-    };
-    defer stream.close();
-
-    // UNIX socket SUCCESS, we are the client
-    if (debug) std.debug.print("Connected to server\n", .{});
-
-    var args_list = std.ArrayList([]const u8).init(allocator);
-    defer args_list.deinit();
-    var args_iterator = try std.process.argsWithAllocator(allocator);
-    defer args_iterator.deinit();
-    _ = args_iterator.next(); // Skip executable
-    while (args_iterator.next()) |arg| {
-        try args_list.append(@as([]const u8, arg));
-    }
-    const args = args_list.items;
-
-    try sendArgumentsToRunningInstance(allocator, args, stream);
-}
-
-fn runInstanceExecutable(allocator: std.mem.Allocator, instance_exe_path: []u8) !void {
-
-    // Build instance ARGV
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    // Build ARGV
     var argv_list = std.ArrayList([]u8).init(allocator);
     defer argv_list.deinit();
     try argv_list.append(instance_exe_path);
-    try argv_list.appendSlice(args[1..]);
+    try argv_list.appendSlice(args);
 
-    // Spawn instance
+    // Spawn
     var child = std.process.Child.init(argv_list.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Ignore;
@@ -114,10 +113,10 @@ fn runInstanceExecutable(allocator: std.mem.Allocator, instance_exe_path: []u8) 
     try child.waitForSpawn();
     const argv_debug = try std.mem.join(allocator, " ", argv_list.items);
     defer allocator.free(argv_debug);
-    if (debug) std.debug.print("Instance spawned! {s}\n", .{argv_debug});
+    if (debug) std.debug.print("Spawned! {s}\n", .{argv_debug});
 }
 
-fn sendArgumentsToRunningInstance(allocator: std.mem.Allocator, args: [][]const u8, stream: std.net.Stream) !void {
+fn sendArgumentsToRunningInstance(allocator: std.mem.Allocator, args: [][]u8, stream: std.net.Stream) !void {
 
     // HELLO
     const hello_json = try std.json.stringifyAlloc(allocator, HelloMessage{}, .{});
@@ -200,11 +199,11 @@ test "can send arguments to running instance" {
     server_state.wait_group.start();
 
     // Send Arguments
-    var args_list = std.ArrayList([]const u8).init(allocator);
+    var args_list = std.ArrayList([]u8).init(allocator);
     defer args_list.deinit();
-    try args_list.append("foo");
-    try args_list.append("bar");
-    try args_list.append("baz");
+    try args_list.append(try std.fmt.allocPrint(allocator, "foo", .{}));
+    try args_list.append(try std.fmt.allocPrint(allocator, "bar", .{}));
+    try args_list.append(try std.fmt.allocPrint(allocator, "baz", .{}));
     const args = args_list.items;
     try sendArgumentsToRunningInstance(allocator, args, stream);
 
