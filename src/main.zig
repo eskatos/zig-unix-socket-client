@@ -14,6 +14,10 @@ const debug = builtin.mode == std.builtin.Mode.Debug;
 //
 // Data is transferred on the UNIX socket using EOL terminated JSON messages.
 
+// TODO review error handling
+// TODO review socket and instance paths
+// TODO extract agruments collection
+
 const HelloMessage = struct { msg: []const u8 = "HELLO" };
 const ReadyMessage = struct { msg: []const u8 = "READY" };
 const ArgsMessage = struct { args: [][]const u8 };
@@ -27,58 +31,71 @@ const AF_SOCKET_NAME = "instance.lock";
 const INSTANCE_EXECUTABLE_UNIX_NAME = "target-executable";
 const INSTANCE_EXECUTABLE_WINDOWS_NAME = "target-executable.exe";
 
+const PathInfo = struct {
+    allocator: std.mem.Allocator,
+    socket_path: []u8,
+    instance_exe_path: []u8,
+
+    pub fn init(allocator: std.mem.Allocator) !PathInfo {
+        const self_exe_path = try std.fs.selfExePathAlloc(allocator);
+        defer allocator.free(self_exe_path);
+        const self_exe_dir = std.fs.path.dirname(self_exe_path).?;
+        // Locate UNIX socket
+        const socket_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", AF_SOCKET_NAME });
+        // Locate instance executable
+        const executable_name = if (comptime builtin.target.os.tag == .windows) INSTANCE_EXECUTABLE_WINDOWS_NAME else INSTANCE_EXECUTABLE_UNIX_NAME;
+        const instance_exe_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", executable_name });
+        return .{ .allocator = allocator, .socket_path = socket_path, .instance_exe_path = instance_exe_path };
+    }
+
+    pub fn deinit(self: *PathInfo) void {
+        self.allocator.free(self.socket_path);
+        self.allocator.free(self.instance_exe_path);
+    }
+
+    pub fn debugPrint(self: *PathInfo) void {
+        if (debug) {
+            std.debug.print("PathInfo(socket_path = '{s}', instance_exe_path = '{s}')\n", .{ self.socket_path, self.instance_exe_path });
+        }
+    }
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    // Locate self exe
-    const self_exe_path = try std.fs.selfExePathAlloc(allocator);
-    defer allocator.free(self_exe_path);
-    const opt_self_exe_dir = std.fs.path.dirname(self_exe_path);
-    if (opt_self_exe_dir) |self_exe_dir| {
-        // Locate UNIX socket
-        const socket_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", AF_SOCKET_NAME });
-        defer allocator.free(socket_path);
-        if (debug) std.debug.print("UNIX socket at {s}.\n", .{socket_path});
+    var path_info: PathInfo = try PathInfo.init(allocator);
+    defer path_info.deinit();
+    path_info.debugPrint();
 
-        // Open UNIX socket
-        const stream = std.net.connectUnixSocket(socket_path) catch |err| switch (err) {
-            else => {
-                // FAILED, start instance
-                if (debug) std.debug.print("Can't connect to UNIX socket, starting the instance\n", .{});
-                try runInstanceExecutable(allocator, self_exe_dir);
-                std.process.exit(0);
-            },
-        };
-        defer stream.close();
+    // Open UNIX socket
+    const stream = std.net.connectUnixSocket(path_info.socket_path) catch |err| switch (err) {
+        else => {
+            // FAILED, start instance
+            if (debug) std.debug.print("Can't connect to UNIX socket, starting the instance\n", .{});
+            try runInstanceExecutable(allocator, path_info.instance_exe_path);
+            std.process.exit(0);
+        },
+    };
+    defer stream.close();
 
-        // UNIX socket SUCCESS, we are the client
-        if (debug) std.debug.print("Connected to server\n", .{});
+    // UNIX socket SUCCESS, we are the client
+    if (debug) std.debug.print("Connected to server\n", .{});
 
-        var args_list = std.ArrayList([]const u8).init(allocator);
-        defer args_list.deinit();
-        var args_iterator = try std.process.argsWithAllocator(allocator);
-        defer args_iterator.deinit();
-        _ = args_iterator.next(); // Skip executable
-        while (args_iterator.next()) |arg| {
-            try args_list.append(@as([]const u8, arg));
-        }
-        const args = args_list.items;
-
-        try sendArgumentsToRunningInstance(allocator, args, stream);
-    } else {
-        std.debug.print("ERROR Unable to locate self executable, aborting", .{});
-        std.process.exit(1);
+    var args_list = std.ArrayList([]const u8).init(allocator);
+    defer args_list.deinit();
+    var args_iterator = try std.process.argsWithAllocator(allocator);
+    defer args_iterator.deinit();
+    _ = args_iterator.next(); // Skip executable
+    while (args_iterator.next()) |arg| {
+        try args_list.append(@as([]const u8, arg));
     }
+    const args = args_list.items;
+
+    try sendArgumentsToRunningInstance(allocator, args, stream);
 }
 
-fn runInstanceExecutable(allocator: std.mem.Allocator, self_exe_dir: []const u8) !void {
-
-    // Locate instance executable
-    const executable_name = if (comptime builtin.target.os.tag == .windows) INSTANCE_EXECUTABLE_WINDOWS_NAME else INSTANCE_EXECUTABLE_UNIX_NAME;
-    const instance_exe_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", executable_name });
-    defer allocator.free(instance_exe_path);
-    if (debug) std.debug.print("Instance executable at {s}.\n", .{instance_exe_path});
+fn runInstanceExecutable(allocator: std.mem.Allocator, instance_exe_path: []u8) !void {
 
     // Build instance ARGV
     const args = try std.process.argsAlloc(allocator);
@@ -147,35 +164,24 @@ fn sendArgumentsToRunningInstance(allocator: std.mem.Allocator, args: [][]const 
     }
 }
 
-test "integration test" {
+test "can spawn instance when none running" {
     const allocator = std.testing.allocator;
-    // CWD
-    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
-    defer allocator.free(cwd_path);
-    std.debug.print("cwd_path: {s}\n", .{cwd_path});
 
-    // $CWD/zig-out/
-    const zig_out_dir_path = try std.fs.path.resolve(allocator, &.{ cwd_path, "zig-out" });
-    defer allocator.free(zig_out_dir_path);
-    std.fs.makeDirAbsolute(zig_out_dir_path) catch |err| switch (err) {
-        else => {},
-    };
-
-    // $CWD/zig-out/test/
-    const test_dir_path = try std.fs.path.resolve(allocator, &.{ zig_out_dir_path, "test" });
-    defer allocator.free(test_dir_path);
-    std.fs.makeDirAbsolute(test_dir_path) catch |err| switch (err) {
-        else => {},
-    };
-
-    // $CWD/zig-out/test/instance.lock
-    const unix_socket_path = try std.fs.path.resolve(allocator, &.{ test_dir_path, "instance.lock" });
+    // UNIX socket path
+    const unix_socket_path = try testInstanceLockFilePath(allocator);
     defer allocator.free(unix_socket_path);
-    std.fs.deleteFileAbsolute(unix_socket_path) catch |err| switch (err) {
-        else => {},
-    };
 
-    // Init shared mutable state
+    // TODO test instance spawning
+}
+
+test "can send arguments to running instance" {
+    const allocator = std.testing.allocator;
+
+    // UNIX socket path
+    const unix_socket_path = try testInstanceLockFilePath(allocator);
+    defer allocator.free(unix_socket_path);
+
+    // Init test server shared mutable state
     var server_state: TestServerState = TestServerState.init(allocator);
     defer server_state.deinit();
     try std.testing.expect(server_state.received_messages.items.len == 0);
@@ -211,6 +217,34 @@ test "integration test" {
     const args_json = try std.json.stringifyAlloc(allocator, ArgsMessage{ .args = args }, .{});
     defer allocator.free(args_json);
     try std.testing.expect(std.mem.eql(u8, server_state.received_messages.items[1], args_json));
+}
+
+fn testInstanceLockFilePath(allocator: std.mem.Allocator) ![]u8 {
+    // CWD
+    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd_path);
+    std.debug.print("cwd_path: {s}\n", .{cwd_path});
+
+    // $CWD/zig-out/
+    const zig_out_dir_path = try std.fs.path.resolve(allocator, &.{ cwd_path, "zig-out" });
+    defer allocator.free(zig_out_dir_path);
+    std.fs.makeDirAbsolute(zig_out_dir_path) catch |err| switch (err) {
+        else => {},
+    };
+
+    // $CWD/zig-out/test/
+    const test_dir_path = try std.fs.path.resolve(allocator, &.{ zig_out_dir_path, "test" });
+    defer allocator.free(test_dir_path);
+    std.fs.makeDirAbsolute(test_dir_path) catch |err| switch (err) {
+        else => {},
+    };
+
+    // $CWD/zig-out/test/instance.lock
+    const unix_socket_path = try std.fs.path.resolve(allocator, &.{ test_dir_path, "instance.lock" });
+    std.fs.deleteFileAbsolute(unix_socket_path) catch |err| switch (err) {
+        else => {},
+    };
+    return unix_socket_path;
 }
 
 const TestServerState = struct {
