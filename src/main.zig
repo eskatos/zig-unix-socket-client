@@ -30,18 +30,6 @@ pub fn main() !void {
     try launcher(allocator, path_info.socket_path, path_info.instance_exe_path, path_info.args_list.items);
 }
 
-fn launcher(allocator: std.mem.Allocator, socket_path: []u8, instance_exe_path: []u8, args: [][]u8) !void {
-    const connection = std.net.connectUnixSocket(socket_path);
-    if (connection) |stream| {
-        defer stream.close();
-        if (debug) std.debug.print("Connected to server\n", .{});
-        try sendArgumentsToRunningInstance(allocator, args, stream);
-    } else |err| {
-        if (debug) std.debug.print("Can't connect ({s}), starting the instance\n", .{@errorName(err)});
-        try runInstanceExecutable(allocator, instance_exe_path, args);
-    }
-}
-
 const EnvInfo = struct {
     allocator: std.mem.Allocator,
     socket_path: []u8,
@@ -86,24 +74,16 @@ const EnvInfo = struct {
     }
 };
 
-fn runInstanceExecutable(allocator: std.mem.Allocator, instance_exe_path: []u8, args: [][]u8) !void {
-
-    // Build ARGV
-    var argv_list = std.ArrayList([]u8).init(allocator);
-    defer argv_list.deinit();
-    try argv_list.append(instance_exe_path);
-    try argv_list.appendSlice(args);
-
-    // Spawn
-    var child = std.process.Child.init(argv_list.items, allocator);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    try child.spawn();
-    try child.waitForSpawn();
-    const argv_debug = try std.mem.join(allocator, " ", argv_list.items);
-    defer allocator.free(argv_debug);
-    if (debug) std.debug.print("Spawned! {s}\n", .{argv_debug});
+fn launcher(allocator: std.mem.Allocator, socket_path: []u8, instance_exe_path: []u8, args: [][]u8) !void {
+    const connection = std.net.connectUnixSocket(socket_path);
+    if (connection) |stream| {
+        defer stream.close();
+        if (debug) std.debug.print("Connected to server\n", .{});
+        try sendArgumentsToRunningInstance(allocator, args, stream);
+    } else |err| {
+        if (debug) std.debug.print("Can't connect ({s}), starting the instance\n", .{@errorName(err)});
+        try runInstanceExecutable(allocator, instance_exe_path, args);
+    }
 }
 
 fn sendArgumentsToRunningInstance(allocator: std.mem.Allocator, args: [][]u8, stream: std.net.Stream) !void {
@@ -144,6 +124,35 @@ fn sendArgumentsToRunningInstance(allocator: std.mem.Allocator, args: [][]u8, st
         std.process.exit(1);
     }
 }
+
+fn runInstanceExecutable(allocator: std.mem.Allocator, instance_exe_path: []u8, args: [][]u8) !void {
+
+    // Build ARGV
+    var argv_list = std.ArrayList([]u8).init(allocator);
+    defer argv_list.deinit();
+    try argv_list.append(instance_exe_path);
+    try argv_list.appendSlice(args);
+
+    // Spawn
+    var child = std.process.Child.init(argv_list.items, allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    try child.spawn();
+    try child.waitForSpawn();
+    const argv_debug = try std.mem.join(allocator, " ", argv_list.items);
+    defer allocator.free(argv_debug);
+    if (debug) std.debug.print("Spawned! {s}\n", .{argv_debug});
+}
+
+// ============================================================================
+//  _____ _____ ____ _____ ____
+// |_   _| ____/ ___|_   _/ ___|
+//   | | |  _| \___ \ | | \___ \
+//   | | | |___ ___) || |  ___) |
+//   |_| |_____|____/ |_| |____/
+//
+// ============================================================================
 
 test "can spawn instance when none running" {
     std.debug.print("\n>> can spawn instance when none running\n", .{});
