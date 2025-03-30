@@ -250,24 +250,18 @@ fn testBaseDirPath(allocator: std.mem.Allocator) ![]u8 {
 
 const TestArguments = struct {
     list: std.ArrayList([]u8),
-    foo: []u8,
-    bar: []u8,
-    baz: []u8,
     allocator: std.mem.Allocator,
     pub fn init(allocator: std.mem.Allocator) !TestArguments {
         var args_list = std.ArrayList([]u8).init(allocator);
-        const foo = try std.fmt.allocPrint(allocator, "foo", .{});
-        const bar = try std.fmt.allocPrint(allocator, "bar", .{});
-        const baz = try std.fmt.allocPrint(allocator, "baz", .{});
-        try args_list.append(foo);
-        try args_list.append(bar);
-        try args_list.append(baz);
-        return .{ .list = args_list, .foo = foo, .bar = bar, .baz = baz, .allocator = allocator };
+        try args_list.append(try std.fmt.allocPrint(allocator, "foo", .{}));
+        try args_list.append(try std.fmt.allocPrint(allocator, "bar", .{}));
+        try args_list.append(try std.fmt.allocPrint(allocator, "baz", .{}));
+        return .{ .list = args_list, .allocator = allocator };
     }
     pub fn deinit(self: *TestArguments) void {
-        self.allocator.free(self.foo);
-        self.allocator.free(self.bar);
-        self.allocator.free(self.baz);
+        for (self.list.items) |arg| {
+            self.allocator.free(arg);
+        }
         self.list.deinit();
     }
 };
