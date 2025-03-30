@@ -16,7 +16,6 @@ const debug = builtin.mode == std.builtin.Mode.Debug;
 
 // TODO review error handling
 // TODO review socket and instance paths
-// TODO extract agruments collection
 
 const HelloMessage = struct { msg: []const u8 = "HELLO" };
 const ReadyMessage = struct { msg: []const u8 = "READY" };
@@ -28,8 +27,7 @@ const TERMINATOR_STRING: []const u8 = "\u{000A}";
 const JSON_MAX_SIZE: usize = 65536;
 
 const AF_SOCKET_NAME = "instance.lock";
-const INSTANCE_EXECUTABLE_UNIX_NAME = "target-executable";
-const INSTANCE_EXECUTABLE_WINDOWS_NAME = "target-executable.exe";
+const INSTANCE_EXECUTABLE_NAME = if (builtin.target.os.tag == .windows) "target-executable.exe" else "target-executable";
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -39,12 +37,17 @@ pub fn main() !void {
     defer path_info.deinit();
     try path_info.debugPrint();
 
+    try launcher(allocator, path_info.socket_path, path_info.instance_exe_path, path_info.args);
+}
+
+fn launcher(allocator: std.mem.Allocator, socket_path: []u8, instance_exe_path: []u8, args: [][]u8) !void {
+
     // Try connecting to the instance
-    const stream = std.net.connectUnixSocket(path_info.socket_path) catch |err| switch (err) {
+    const stream = std.net.connectUnixSocket(socket_path) catch |err| switch (err) {
         else => {
             // Start instance
             if (debug) std.debug.print("Can't connect to UNIX socket, starting the instance\n", .{});
-            try runInstanceExecutable(allocator, path_info.instance_exe_path, path_info.args);
+            try runInstanceExecutable(allocator, instance_exe_path, args);
             std.process.exit(0);
         },
     };
@@ -52,7 +55,7 @@ pub fn main() !void {
 
     // We are the client
     if (debug) std.debug.print("Connected to server\n", .{});
-    try sendArgumentsToRunningInstance(allocator, path_info.args, stream);
+    try sendArgumentsToRunningInstance(allocator, args, stream);
 }
 
 const EnvInfo = struct {
@@ -68,8 +71,7 @@ const EnvInfo = struct {
         // Locate UNIX socket
         const socket_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", AF_SOCKET_NAME });
         // Locate instance executable
-        const executable_name = if (comptime builtin.target.os.tag == .windows) INSTANCE_EXECUTABLE_WINDOWS_NAME else INSTANCE_EXECUTABLE_UNIX_NAME;
-        const instance_exe_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", executable_name });
+        const instance_exe_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", INSTANCE_EXECUTABLE_NAME });
         // Gather arguments
         var args_list = std.ArrayList([]u8).init(allocator);
         var args_iterator = try std.process.argsWithAllocator(allocator);
@@ -166,19 +168,25 @@ fn sendArgumentsToRunningInstance(allocator: std.mem.Allocator, args: [][]u8, st
 test "can spawn instance when none running" {
     const allocator = std.testing.allocator;
 
-    // UNIX socket path
-    const unix_socket_path = try testInstanceLockFilePath(allocator);
+    const unix_socket_path = try testSocketFilePath(allocator);
+    const instance_exe_path = try testInstanceExecutablePath(allocator);
+    const args = try testArguments(allocator);
     defer allocator.free(unix_socket_path);
+    defer allocator.free(instance_exe_path);
+    defer allocator.free(args);
 
-    // TODO test instance spawning
+    try launcher(allocator, unix_socket_path, instance_exe_path, args);
 }
 
 test "can send arguments to running instance" {
     const allocator = std.testing.allocator;
 
-    // UNIX socket path
-    const unix_socket_path = try testInstanceLockFilePath(allocator);
+    const unix_socket_path = try testSocketFilePath(allocator);
+    const instance_exe_path = try std.fmt.allocPrint(allocator, "NOPE", .{});
+    const args = try testArguments(allocator);
     defer allocator.free(unix_socket_path);
+    defer allocator.free(instance_exe_path);
+    defer allocator.free(args);
 
     // Init test server shared mutable state
     var server_state: TestServerState = TestServerState.init(allocator);
@@ -186,28 +194,14 @@ test "can send arguments to running instance" {
     try std.testing.expect(server_state.received_messages.items.len == 0);
 
     // Start Recording Server in separate Thread
+    server_state.wait_group.start();
     const server_thread = try std.Thread.spawn(.{ .allocator = allocator }, startTestServer, .{ allocator, unix_socket_path, &server_state });
     defer server_thread.detach();
-    server_state.wait_group.start();
-
-    // Wait for listening
     server_state.wait_group.wait();
 
     // Test Client
-    const stream = try std.net.connectUnixSocket(unix_socket_path);
-    defer stream.close();
     server_state.wait_group.start();
-
-    // Send Arguments
-    var args_list = std.ArrayList([]u8).init(allocator);
-    defer args_list.deinit();
-    try args_list.append(try std.fmt.allocPrint(allocator, "foo", .{}));
-    try args_list.append(try std.fmt.allocPrint(allocator, "bar", .{}));
-    try args_list.append(try std.fmt.allocPrint(allocator, "baz", .{}));
-    const args = args_list.items;
-    try sendArgumentsToRunningInstance(allocator, args, stream);
-
-    // Wait for exchange termination
+    try launcher(allocator, unix_socket_path, instance_exe_path, args);
     server_state.wait_group.wait();
 
     // Expect server received messages
@@ -218,11 +212,40 @@ test "can send arguments to running instance" {
     try std.testing.expect(std.mem.eql(u8, server_state.received_messages.items[1], args_json));
 }
 
-fn testInstanceLockFilePath(allocator: std.mem.Allocator) ![]u8 {
+// $CWD/zig-out/test/instance.lock
+fn testSocketFilePath(allocator: std.mem.Allocator) ![]u8 {
+    const base_dir_path = try testBaseDirPath(allocator);
+    defer allocator.free(base_dir_path);
+    const unix_socket_path = try std.fs.path.resolve(allocator, &.{ base_dir_path, "instance.lock" });
+    std.fs.deleteFileAbsolute(unix_socket_path) catch |err| switch (err) {
+        else => {},
+    };
+    return unix_socket_path;
+}
+
+// $CWD/zig-out/test/{instance_exe_name}
+fn testInstanceExecutablePath(allocator: std.mem.Allocator) ![]u8 {
+
     // CWD
     const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
     defer allocator.free(cwd_path);
-    std.debug.print("cwd_path: {s}\n", .{cwd_path});
+
+    // $CWD/test/
+    const test_dir_path = try std.fs.path.resolve(allocator, &.{ cwd_path, "test" });
+    defer allocator.free(test_dir_path);
+
+    // $CWD/test/{exe_name}
+    const exe_name = if (builtin.target.os.tag == .windows) "test_executable.bat" else "test_executable.sh";
+    const test_exe_path = try std.fs.path.resolve(allocator, &.{ test_dir_path, exe_name });
+
+    return test_exe_path;
+}
+
+fn testBaseDirPath(allocator: std.mem.Allocator) ![]u8 {
+
+    // CWD
+    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd_path);
 
     // $CWD/zig-out/
     const zig_out_dir_path = try std.fs.path.resolve(allocator, &.{ cwd_path, "zig-out" });
@@ -233,17 +256,20 @@ fn testInstanceLockFilePath(allocator: std.mem.Allocator) ![]u8 {
 
     // $CWD/zig-out/test/
     const test_dir_path = try std.fs.path.resolve(allocator, &.{ zig_out_dir_path, "test" });
-    defer allocator.free(test_dir_path);
     std.fs.makeDirAbsolute(test_dir_path) catch |err| switch (err) {
         else => {},
     };
 
-    // $CWD/zig-out/test/instance.lock
-    const unix_socket_path = try std.fs.path.resolve(allocator, &.{ test_dir_path, "instance.lock" });
-    std.fs.deleteFileAbsolute(unix_socket_path) catch |err| switch (err) {
-        else => {},
-    };
-    return unix_socket_path;
+    return test_dir_path;
+}
+
+fn testArguments(allocator: std.mem.Allocator) ![][]u8 {
+    // Arguments
+    var args_list = std.ArrayList([]u8).init(allocator);
+    try args_list.append(try std.fmt.allocPrint(allocator, "foo", .{}));
+    try args_list.append(try std.fmt.allocPrint(allocator, "bar", .{}));
+    try args_list.append(try std.fmt.allocPrint(allocator, "baz", .{}));
+    return args_list.items;
 }
 
 const TestServerState = struct {
