@@ -20,13 +20,14 @@ const INSTANCE_EXECUTABLE_NAME = if (builtin.target.os.tag == .windows) "target-
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
     var path_info: EnvInfo = try EnvInfo.init(allocator);
     defer path_info.deinit();
     try path_info.debugPrint();
 
-    try launcher(allocator, path_info.socket_path, path_info.instance_exe_path, path_info.args);
+    try launcher(allocator, path_info.socket_path, path_info.instance_exe_path, path_info.args_list.items);
 }
 
 fn launcher(allocator: std.mem.Allocator, socket_path: []u8, instance_exe_path: []u8, args: [][]u8) !void {
@@ -45,7 +46,7 @@ const EnvInfo = struct {
     allocator: std.mem.Allocator,
     socket_path: []u8,
     instance_exe_path: []u8,
-    args: [][]u8,
+    args_list: std.ArrayList([]u8),
 
     pub fn init(allocator: std.mem.Allocator) !EnvInfo {
         const self_exe_path = try std.fs.selfExePathAlloc(allocator);
@@ -64,18 +65,22 @@ const EnvInfo = struct {
             const copy = try std.fmt.allocPrint(allocator, "{s}", .{arg});
             try args_list.append(copy);
         }
-        return .{ .allocator = allocator, .socket_path = socket_path, .instance_exe_path = instance_exe_path, .args = args_list.items };
+        return .{ .allocator = allocator, .socket_path = socket_path, .instance_exe_path = instance_exe_path, .args_list = args_list };
     }
 
     pub fn deinit(self: *EnvInfo) void {
         self.allocator.free(self.socket_path);
         self.allocator.free(self.instance_exe_path);
-        self.allocator.free(self.args);
+        for (self.args_list.items) |arg| {
+            self.allocator.free(arg);
+        }
+        self.args_list.deinit();
     }
 
     pub fn debugPrint(self: *EnvInfo) !void {
         if (debug) {
-            const args_string = try std.mem.join(self.allocator, " ", self.args);
+            const args_string = try std.mem.join(self.allocator, " ", self.args_list.items);
+            defer self.allocator.free(args_string);
             std.debug.print("EnvInfo(\n  socket_path = {s},\n  instance_exe_path = {s},\n  args = {s}\n)\n", .{ self.socket_path, self.instance_exe_path, args_string });
         }
     }
