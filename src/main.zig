@@ -2,7 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const debug = builtin.mode == std.builtin.Mode.Debug;
 
-// TODO review error handling
 // TODO review socket and instance paths
 
 const HELLO_MESSAGE = "{\"msg\":\"HELLO\"}";
@@ -18,16 +17,26 @@ const JSON_MAX_SIZE: usize = 65536;
 const UNIX_SOCKET_FILE_NAME = "instance.lock";
 const INSTANCE_EXECUTABLE_NAME = if (builtin.target.os.tag == .windows) "target-executable.exe" else "target-executable";
 
-pub fn main() !void {
+const LauncherError = error{
+    UnknownReadyMessage,
+    UnknownOkMessage,
+};
+
+pub fn main() void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
-    var path_info: EnvInfo = try EnvInfo.init(allocator);
+    var path_info: EnvInfo = EnvInfo.init(allocator) catch unreachable;
     defer path_info.deinit();
-    try path_info.debugPrint();
+    path_info.debugPrint() catch unreachable;
 
-    try launcher(allocator, path_info.socket_path, path_info.instance_exe_path, path_info.args_list.items);
+    if (launcher(allocator, path_info.socket_path, path_info.instance_exe_path, path_info.args_list.items)) {
+        std.process.exit(0);
+    } else |err| {
+        std.debug.print("{s}, aborting!", .{@errorName(err)});
+        std.process.exit(1);
+    }
 }
 
 const EnvInfo = struct {
@@ -97,6 +106,7 @@ fn sendArgumentsToRunningInstance(allocator: std.mem.Allocator, args: [][]u8, st
     if (debug) std.debug.print("Waiting for {s}\n", .{READY_MESSAGE});
     const ready_server = try stream.reader().readUntilDelimiterAlloc(allocator, TERMINATOR_CHAR, JSON_MAX_SIZE);
     defer allocator.free(ready_server);
+    if (debug) std.debug.print("Client received {s}\n", .{ready_server});
 
     if (std.mem.eql(u8, ready_server, READY_MESSAGE)) {
 
@@ -115,12 +125,10 @@ fn sendArgumentsToRunningInstance(allocator: std.mem.Allocator, args: [][]u8, st
             if (debug) std.debug.print("Server OK'ed arguments\n", .{});
             return;
         } else {
-            std.debug.print("ERROR Server replied with unknown OK message, aborting\n", .{});
-            std.process.exit(1);
+            return LauncherError.UnknownOkMessage;
         }
     } else {
-        std.debug.print("ERROR Server replied with unknown READY message, aborting\n", .{});
-        std.process.exit(1);
+        return LauncherError.UnknownReadyMessage;
     }
 }
 
@@ -158,10 +166,12 @@ test "can spawn instance when none running" {
     const allocator = std.testing.allocator;
 
     const unix_socket_path = testSocketFilePath(allocator);
-    const instance_exe_path = testInstanceExecutablePath(allocator);
-    var args = TestArguments.init(allocator);
     defer allocator.free(unix_socket_path);
+
+    const instance_exe_path = testInstanceExecutablePath(allocator);
     defer allocator.free(instance_exe_path);
+
+    var args = TestArguments.init(allocator);
     defer args.deinit();
 
     try launcher(allocator, unix_socket_path, instance_exe_path, args.list.items);
@@ -172,16 +182,17 @@ test "can send arguments to running instance" {
     const allocator = std.testing.allocator;
 
     const unix_socket_path = testSocketFilePath(allocator);
-    const instance_exe_path = try std.fmt.allocPrint(allocator, "NOPE", .{});
-    var args = TestArguments.init(allocator);
     defer allocator.free(unix_socket_path);
+
+    const instance_exe_path = try std.fmt.allocPrint(allocator, "NOPE", .{});
     defer allocator.free(instance_exe_path);
+
+    var args = TestArguments.init(allocator);
     defer args.deinit();
 
     // Init test server shared mutable state
     var server_state: TestServerState = TestServerState.init(allocator);
     defer server_state.deinit();
-    try std.testing.expect(server_state.received_messages.items.len == 0);
 
     // Start Recording Server in separate Thread
     server_state.wait_group.start();
@@ -198,6 +209,66 @@ test "can send arguments to running instance" {
     const args_json = try std.json.stringifyAlloc(allocator, ArgsMessage{ .args = args.list.items }, .{});
     defer allocator.free(args_json);
     try std.testing.expect(std.mem.eql(u8, server_state.received_messages.items[1], args_json));
+}
+
+test "fails with a qualified error when server replies wrong HELLO" {
+    std.debug.print("\n>> fails with a qualified error when server replies wrong HELLO\n", .{});
+    const allocator = std.testing.allocator;
+
+    const unix_socket_path = testSocketFilePath(allocator);
+    defer allocator.free(unix_socket_path);
+
+    const instance_exe_path = try std.fmt.allocPrint(allocator, "NOPE", .{});
+    defer allocator.free(instance_exe_path);
+
+    var args = TestArguments.init(allocator);
+    defer args.deinit();
+
+    // Init test server shared mutable state
+    const wrong_ready = std.fmt.allocPrint(allocator, "WRONG", .{}) catch unreachable;
+    const wrong_ok = std.fmt.allocPrint(allocator, "WRONG", .{}) catch unreachable;
+    var server_state: TestServerState = TestServerState.initWithMessages(allocator, wrong_ready, wrong_ok);
+    defer server_state.deinit();
+
+    // Start Recording Server in separate Thread
+    server_state.wait_group.start();
+    const server_thread = try std.Thread.spawn(.{ .allocator = allocator }, startTestServer, .{ allocator, unix_socket_path, &server_state });
+    defer server_thread.detach();
+    server_state.wait_group.wait();
+
+    // Test Client
+    const result = launcher(allocator, unix_socket_path, instance_exe_path, args.list.items);
+    try std.testing.expect(result == LauncherError.UnknownReadyMessage);
+}
+
+test "fails with a qualified error when server replies wrong OK" {
+    std.debug.print("\n>> fails with a qualified error when server replies wrong OK\n", .{});
+    const allocator = std.testing.allocator;
+
+    const unix_socket_path = testSocketFilePath(allocator);
+    defer allocator.free(unix_socket_path);
+
+    const instance_exe_path = try std.fmt.allocPrint(allocator, "NOPE", .{});
+    defer allocator.free(instance_exe_path);
+
+    var args = TestArguments.init(allocator);
+    defer args.deinit();
+
+    // Init test server shared mutable state
+    const good_ready = std.fmt.allocPrint(allocator, "{s}", .{READY_MESSAGE}) catch unreachable;
+    const wrong_ok = std.fmt.allocPrint(allocator, "WRONG", .{}) catch unreachable;
+    var server_state: TestServerState = TestServerState.initWithMessages(allocator, good_ready, wrong_ok);
+    defer server_state.deinit();
+
+    // Start Recording Server in separate Thread
+    server_state.wait_group.start();
+    const server_thread = try std.Thread.spawn(.{ .allocator = allocator }, startTestServer, .{ allocator, unix_socket_path, &server_state });
+    defer server_thread.detach();
+    server_state.wait_group.wait();
+
+    // Test Client
+    const result = launcher(allocator, unix_socket_path, instance_exe_path, args.list.items);
+    try std.testing.expect(result == LauncherError.UnknownOkMessage);
 }
 
 // $CWD/zig-out/test/{random}
@@ -277,13 +348,21 @@ const TestArguments = struct {
 const TestServerState = struct {
     wait_group: std.Thread.WaitGroup,
     received_messages: std.ArrayList([]const u8),
+    ready_message: []u8,
+    ok_message: []u8,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) TestServerState {
+        const ready_message = std.fmt.allocPrint(allocator, "{s}", .{READY_MESSAGE}) catch unreachable;
+        const ok_message = std.fmt.allocPrint(allocator, "{s}", .{OK_MESSAGE}) catch unreachable;
+        return initWithMessages(allocator, ready_message, ok_message);
+    }
+
+    pub fn initWithMessages(allocator: std.mem.Allocator, ready_message: []u8, ok_message: []u8) TestServerState {
         var wg: std.Thread.WaitGroup = undefined;
         wg.reset();
         const list = std.ArrayList([]const u8).init(allocator);
-        return .{ .wait_group = wg, .received_messages = list, .allocator = allocator };
+        return .{ .wait_group = wg, .received_messages = list, .ready_message = ready_message, .ok_message = ok_message, .allocator = allocator };
     }
 
     pub fn deinit(self: *TestServerState) void {
@@ -291,6 +370,8 @@ const TestServerState = struct {
             self.allocator.free(received_message);
         }
         self.received_messages.deinit();
+        self.allocator.free(self.ready_message);
+        self.allocator.free(self.ok_message);
     }
 
     pub fn appendMessage(self: *TestServerState, message: []const u8) void {
@@ -314,28 +395,33 @@ fn startTestServer(allocator: std.mem.Allocator, unix_socket_path: []u8, server_
     const connection = server.accept() catch unreachable;
 
     // Server receives HELLO
-    const hello_message = connection.stream.reader().readUntilDelimiterAlloc(allocator, TERMINATOR_CHAR, JSON_MAX_SIZE) catch unreachable;
-    std.debug.print("Server received: {s}\n", .{hello_message});
-    server_state.appendMessage(hello_message);
+    if (connection.stream.reader().readUntilDelimiterAlloc(allocator, TERMINATOR_CHAR, JSON_MAX_SIZE)) |hello_message| {
+        std.debug.print("Server received: {s}\n", .{hello_message});
+        server_state.appendMessage(hello_message);
 
-    if (std.mem.eql(u8, hello_message, HELLO_MESSAGE)) {
+        if (std.mem.eql(u8, hello_message, HELLO_MESSAGE)) {
 
-        // Server sends READY
-        _ = connection.stream.writeAll(READY_MESSAGE) catch unreachable;
-        _ = connection.stream.writeAll(TERMINATOR_STRING) catch unreachable;
-        std.debug.print("Server sent: {s}\n", .{READY_MESSAGE});
+            // Server sends READY
+            _ = connection.stream.writeAll(server_state.ready_message) catch unreachable;
+            _ = connection.stream.writeAll(TERMINATOR_STRING) catch unreachable;
+            std.debug.print("Server sent: {s}\n", .{server_state.ready_message});
 
-        // Server receives ARGUMENTS
-        const args_message = connection.stream.reader().readUntilDelimiterAlloc(allocator, TERMINATOR_CHAR, JSON_MAX_SIZE) catch unreachable;
-        std.debug.print("Server received: {s}\n", .{args_message});
-        server_state.appendMessage(args_message);
+            // Server receives ARGUMENTS
+            if (connection.stream.reader().readUntilDelimiterAlloc(allocator, TERMINATOR_CHAR, JSON_MAX_SIZE)) |args_message| {
+                std.debug.print("Server received: {s}\n", .{args_message});
+                server_state.appendMessage(args_message);
 
-        // Server sends OK
-        _ = connection.stream.writeAll(OK_MESSAGE) catch unreachable;
-        _ = connection.stream.writeAll(TERMINATOR_STRING) catch unreachable;
-        std.debug.print("Server sent: {s}\n", .{OK_MESSAGE});
-    } else {
-        std.debug.print("Server expected HELLO, received garbage", .{});
-        unreachable;
+                // Server sends OK
+                _ = connection.stream.writeAll(server_state.ok_message) catch unreachable;
+                _ = connection.stream.writeAll(TERMINATOR_STRING) catch unreachable;
+                std.debug.print("Server sent: {s}\n", .{server_state.ok_message});
+            } else |err| {
+                std.debug.print("Server failed to read ARGUMENTS: {s}", .{@errorName(err)});
+            }
+        } else {
+            std.debug.print("Server expected HELLO, received garbage", .{});
+        }
+    } else |err| {
+        std.debug.print("Server failed to read HELLO: {s}", .{@errorName(err)});
     }
 }
