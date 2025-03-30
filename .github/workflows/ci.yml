@@ -16,8 +16,11 @@ jobs:
           version: 0.14.0
 
       - run: zig build test --summary all
-        name: Test
-
+        name: Test Debug
+  
+      - run: zig build test -Doptimize=ReleaseSmall --summary all
+        name: Test Release
+  
       - run: zig build release --summary all
         if: runner.os == 'Linux'
         name: Build Release
