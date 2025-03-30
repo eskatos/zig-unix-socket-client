@@ -2,18 +2,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const debug = builtin.mode == std.builtin.Mode.Debug;
 
-// Launcher for single instance application
-//
-// Uses a UNIX socket as a lock and communication channel for the single instance.
-//
-// If the UNIX socket is not connected to a running instance of the application,
-// then this program will launch the application, passing arguments.
-//
-// If the UNIX socket is connected to a running instance of the application,
-// then this program will send its arguments to the application via the UNIX socket.
-//
-// Data is transferred on the UNIX socket using EOL terminated JSON messages.
-
 // TODO review error handling
 // TODO review socket and instance paths
 
@@ -26,7 +14,7 @@ const TERMINATOR_CHAR: u8 = '\u{000A}';
 const TERMINATOR_STRING: []const u8 = "\u{000A}";
 const JSON_MAX_SIZE: usize = 65536;
 
-const AF_SOCKET_NAME = "instance.lock";
+const UNIX_SOCKET_FILE_NAME = "instance.lock";
 const INSTANCE_EXECUTABLE_NAME = if (builtin.target.os.tag == .windows) "target-executable.exe" else "target-executable";
 
 pub fn main() !void {
@@ -69,7 +57,7 @@ const EnvInfo = struct {
         defer allocator.free(self_exe_path);
         const self_exe_dir = std.fs.path.dirname(self_exe_path).?;
         // Locate UNIX socket
-        const socket_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", AF_SOCKET_NAME });
+        const socket_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", UNIX_SOCKET_FILE_NAME });
         // Locate instance executable
         const instance_exe_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", INSTANCE_EXECUTABLE_NAME });
         // Gather arguments
