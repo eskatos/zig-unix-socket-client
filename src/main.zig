@@ -200,10 +200,14 @@ test "can send arguments to running instance" {
 fn testSocketFilePath(allocator: std.mem.Allocator) ![]u8 {
     const base_dir_path = try testBaseDirPath(allocator);
     defer allocator.free(base_dir_path);
-    const unix_socket_path = try std.fs.path.resolve(allocator, &.{ base_dir_path, "instance.lock" });
+    const number = std.crypto.random.int(u8);
+    const name = try std.fmt.allocPrint(allocator, "instance_{d}.lock", .{number});
+    defer allocator.free(name);
+    const unix_socket_path = try std.fs.path.resolve(allocator, &.{ base_dir_path, name });
     std.fs.deleteFileAbsolute(unix_socket_path) catch |err| switch (err) {
         else => {},
     };
+    std.debug.print("Test unix socket path: {s}\n", .{unix_socket_path});
     return unix_socket_path;
 }
 
