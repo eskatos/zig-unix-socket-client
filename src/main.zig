@@ -30,22 +30,15 @@ pub fn main() !void {
 }
 
 fn launcher(allocator: std.mem.Allocator, socket_path: []u8, instance_exe_path: []u8, args: [][]u8) !void {
-
-    // Try connecting to the instance
-    const stream = std.net.connectUnixSocket(socket_path) catch |err| switch (err) {
-        else => {
-            // Start instance
-            if (debug) std.debug.print("Can't connect to UNIX socket, starting the instance\n", .{});
-            try runInstanceExecutable(allocator, instance_exe_path, args);
-            // std.process.exit(0);
-            return;
-        },
-    };
-    defer stream.close();
-
-    // We are the client
-    if (debug) std.debug.print("Connected to server\n", .{});
-    try sendArgumentsToRunningInstance(allocator, args, stream);
+    const connection = std.net.connectUnixSocket(socket_path);
+    if (connection) |stream| {
+        defer stream.close();
+        if (debug) std.debug.print("Connected to server\n", .{});
+        try sendArgumentsToRunningInstance(allocator, args, stream);
+    } else |err| {
+        if (debug) std.debug.print("Can't connect ({s}), starting the instance\n", .{@errorName(err)});
+        try runInstanceExecutable(allocator, instance_exe_path, args);
+    }
 }
 
 const EnvInfo = struct {
@@ -136,7 +129,7 @@ fn sendArgumentsToRunningInstance(allocator: std.mem.Allocator, args: [][]u8, st
         defer allocator.free(ok_server);
         if (std.mem.eql(u8, ok_server, OK_MESSAGE)) {
             if (debug) std.debug.print("Server OK'ed arguments\n", .{});
-            std.process.exit(0);
+            return;
         } else {
             std.debug.print("ERROR Server replied with unknown OK message, aborting\n", .{});
             std.process.exit(1);
@@ -184,9 +177,7 @@ test "can send arguments to running instance" {
     server_state.wait_group.wait();
 
     // Test Client
-    server_state.wait_group.start();
     try launcher(allocator, unix_socket_path, instance_exe_path, args.list.items);
-    server_state.wait_group.wait();
 
     // Expect server received messages
     std.debug.print("Test server received {x} message(s)\n", .{server_state.received_messages.items.len});
@@ -278,15 +269,19 @@ const TestArguments = struct {
 const TestServerState = struct {
     wait_group: std.Thread.WaitGroup,
     received_messages: std.ArrayList([]const u8),
+    allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) TestServerState {
         var wg: std.Thread.WaitGroup = undefined;
         wg.reset();
         const list = std.ArrayList([]const u8).init(allocator);
-        return .{ .wait_group = wg, .received_messages = list };
+        return .{ .wait_group = wg, .received_messages = list, .allocator = allocator };
     }
 
     pub fn deinit(self: *TestServerState) void {
+        for (self.received_messages.items) |received_message| {
+            self.allocator.free(received_message);
+        }
         self.received_messages.deinit();
     }
 
@@ -333,5 +328,4 @@ fn startTestServer(allocator: std.mem.Allocator, unix_socket_path: []u8, server_
     } else {
         std.debug.print("Server expected HELLO, received garbage", .{});
     }
-    server_state.wait_group.finish();
 }
