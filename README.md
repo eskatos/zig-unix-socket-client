@@ -10,6 +10,9 @@ then this program will launch the application, passing arguments through.
 If the UNIX socket is connected to a running instance of the application,
 then this program will send its arguments to the application via the UNIX socket.
 
+Note that UNIX sockets are supported on Windows starting with Windows 10 RS4 (1803) Version.
+For that reason, this launcher requires Windows 10 RS4 as a minimum.
+
 Data is transferred on the UNIX socket using EOL terminated JSON messages in the following sequence:
 
 ```mermaid
