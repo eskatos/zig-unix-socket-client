@@ -13,7 +13,8 @@
                 "vadimcn.vscode-lldb",
                 "ziglang.vscode-zig",
 				"ms-azuretools.vscode-docker",
-				"ms-vscode.live-server"
+				"ms-vscode.live-server",
+				"bierner.markdown-mermaid"
             ]
         }
     },

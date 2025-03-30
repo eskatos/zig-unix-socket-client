@@ -20,15 +20,20 @@ sequenceDiagram
     actor U as User
     participant L as Launcher
     participant A as Application
-    U->>L: ["arg", "uments"]
-    alt NOT RUNNING
-        L->>A: Launches ["arg", "uments"]
-    else RUNNING UNIX SOCKET
-        L-->>A: {"msg":"HELLO"}
-        A-->>L: {"msg":"READY"}
-        L-->>A: {"args":["arg","uments"]}
-        A-->>L: {"msg":"OK"}
+    alt Application is<br/>not running
+        U->>+L: Starts launcher with<br/>["arg", "uments"]
+        L->>+A: Spawns application with<br/>["arg", "uments"]
+        A-->>L: Spawned
+        L-->>-U: Exits
+    else Application is<br/>already running
+        U->>+L: Starts launcher with<br/>["more", "args"]
+        L->>A: UNIX Socket<br/>{"msg":"HELLO"}
+        A-->>L: UNIX Socket<br/>{"msg":"READY"}
+        L->>A: UNIX Socket<br/>{"args":["more","args"]}
+        A-->>L: UNIX Socket<br/>{"msg":"OK"}
+        L-->>-U: Exits
     end
+    deactivate A
 ```
 
 The logic to resolve the paths to both the UNIX socket and the application's executable is hardcoded in the executable.
