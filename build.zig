@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
@@ -78,6 +79,12 @@ pub fn build(b: *std.Build) !void {
     if (b.args) |args| {
         main_run_cmd.addArgs(args);
     }
+
+    // Copy target executable to output dir
+    const test_exe_src = if (builtin.target.os.tag == .windows) "test/test_executable.bat" else "test/test_executable.sh";
+    const text_exe_dest = if (builtin.target.os.tag == .windows) "instance-executable.exe" else "instance-executable";
+    const install_test_executable_step = b.addInstallBinFile(b.path(test_exe_src), text_exe_dest);
+    main_run_cmd.step.dependOn(&install_test_executable_step.step);
 
     // This creates a build step. It will be visible in the `zig build --help` menu,
     // and can be selected like this: `zig build run`

@@ -2,7 +2,16 @@ const std = @import("std");
 const builtin = @import("builtin");
 const debug = builtin.mode == std.builtin.Mode.Debug;
 
-// TODO review socket and instance paths
+// Change to adjust the UNIX socket path
+//
+// Windows: $USERPROFILE/AppData/LocalLow/$INSTANCE_APPLICATION_NAME/cache/run/instance.lock
+// Linux: $HOME/.cache/$INSTANCE_APPLICATION_NAME/cache/run/instance.lock
+const INSTANCE_APPLICATION_NAME = "app-name";
+
+// Change to adjust the instance executable path
+//
+// $LAUNCHER_EXE_DIR/$INSTANCE_EXECUTABLE_NAME
+const INSTANCE_EXECUTABLE_NAME = if (builtin.target.os.tag == .windows) "instance-executable.exe" else "instance-executable";
 
 const HELLO_MESSAGE = "{\"msg\":\"HELLO\"}";
 const READY_MESSAGE = "{\"msg\":\"READY\"}";
@@ -13,9 +22,6 @@ const ArgsMessage = struct { args: [][]u8 };
 const TERMINATOR_CHAR: u8 = '\u{000A}';
 const TERMINATOR_STRING: []const u8 = "\u{000A}";
 const JSON_MAX_SIZE: usize = 65536;
-
-const UNIX_SOCKET_FILE_NAME = "instance.lock";
-const INSTANCE_EXECUTABLE_NAME = if (builtin.target.os.tag == .windows) "target-executable.exe" else "target-executable";
 
 const LauncherError = error{
     UnknownReadyMessage,
@@ -50,9 +56,9 @@ const EnvInfo = struct {
         defer allocator.free(self_exe_path);
         const self_exe_dir = std.fs.path.dirname(self_exe_path).?;
         // Locate UNIX socket
-        const socket_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", UNIX_SOCKET_FILE_NAME });
+        const socket_path = try locateUnixSocket(allocator);
         // Locate instance executable
-        const instance_exe_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, "..", "..", INSTANCE_EXECUTABLE_NAME });
+        const instance_exe_path = try std.fs.path.join(allocator, &[_][]const u8{ self_exe_dir, INSTANCE_EXECUTABLE_NAME });
         // Gather arguments
         var args_list = std.ArrayList([]u8).init(allocator);
         var args_iterator = try std.process.argsWithAllocator(allocator);
@@ -72,6 +78,20 @@ const EnvInfo = struct {
             self.allocator.free(arg);
         }
         self.args_list.deinit();
+    }
+
+    fn locateUnixSocket(allocator: std.mem.Allocator) ![]u8 {
+        if (builtin.target.os.tag == .windows) {
+            // $USERPROFILE/AppData/LocalLow/$INSTANCE_APPLICATION_NAME/cache/run/instance.lock
+            const user_dir = try std.process.getEnvVarOwned(allocator, "USERPROFILE");
+            defer allocator.free(user_dir);
+            return try std.fs.path.join(allocator, &[_][]const u8{ user_dir, "AppData/LocalLow", INSTANCE_APPLICATION_NAME, "cache/run/instance.lock" });
+        } else {
+            // $HOME/.cache/$INSTANCE_APPLICATION_NAME/cache/run/instance.lock
+            const user_dir = try std.process.getEnvVarOwned(allocator, "HOME");
+            defer allocator.free(user_dir);
+            return try std.fs.path.join(allocator, &[_][]const u8{ user_dir, ".cache", INSTANCE_APPLICATION_NAME, "cache/run/instance.lock" });
+        }
     }
 
     pub fn debugPrint(self: *EnvInfo) !void {
@@ -139,16 +159,22 @@ fn runInstanceExecutable(allocator: std.mem.Allocator, instance_exe_path: []u8, 
     defer argv_list.deinit();
     try argv_list.append(instance_exe_path);
     try argv_list.appendSlice(args);
+    const argv_debug = try std.mem.join(allocator, " ", argv_list.items);
+    defer allocator.free(argv_debug);
 
     // Spawn
     var child = std.process.Child.init(argv_list.items, allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
-    try child.spawn();
-    try child.waitForSpawn();
-    const argv_debug = try std.mem.join(allocator, " ", argv_list.items);
-    defer allocator.free(argv_debug);
+    child.spawn() catch |err| {
+        if (debug) std.debug.print("Unable to spawn! {s}\n", .{argv_debug});
+        return err;
+    };
+    child.waitForSpawn() catch |err| {
+        if (debug) std.debug.print("Unable to wait for spawn! {s}\n", .{argv_debug});
+        return err;
+    };
     if (debug) std.debug.print("Spawned! {s}\n", .{argv_debug});
 }
 

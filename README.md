@@ -37,5 +37,5 @@ Debug builds output expected application messages to stderr for easy testing.
 One can use the following `netcat` command to simulate a running application:
 
 ```shell
-nc -vklU path/to/instance.lock
+mkdir -p $HOME/.cache/app-name/cache/run/ ; nc -vklU $HOME/.cache/app-name/cache/run/instance.lock
 ```

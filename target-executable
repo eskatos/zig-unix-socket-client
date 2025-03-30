@@ -1,7 +1,0 @@
-#!/bin/sh
-set -e
-echo "APPLICATION INSTANCE RUNNING..."
-sleep 2
-echo "GOT ARGUMENTS"
-echo $@
-echo
