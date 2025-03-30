@@ -187,12 +187,13 @@ test "can send arguments to running instance" {
     try std.testing.expect(std.mem.eql(u8, server_state.received_messages.items[1], args_json));
 }
 
-// $CWD/zig-out/test/instance.lock
+// $CWD/zig-out/test/{random}
 fn testSocketFilePath(allocator: std.mem.Allocator) ![]u8 {
     const base_dir_path = try testBaseDirPath(allocator);
     defer allocator.free(base_dir_path);
     const number = std.crypto.random.int(u8);
-    const name = try std.fmt.allocPrint(allocator, "instance_{d}.lock", .{number});
+    // path must be as short as possible to prevent NameTooLong errors
+    const name = try std.fmt.allocPrint(allocator, "af_{d}", .{number});
     defer allocator.free(name);
     const unix_socket_path = try std.fs.path.resolve(allocator, &.{ base_dir_path, name });
     std.fs.deleteFileAbsolute(unix_socket_path) catch |err| switch (err) {
