@@ -99,7 +99,6 @@ fn sendArgumentsToRunningInstance(allocator: std.mem.Allocator, args: [][]u8, st
     defer allocator.free(ready_server);
 
     if (std.mem.eql(u8, ready_server, READY_MESSAGE)) {
-        if (debug) std.debug.print("SERVER READY!\n", .{});
 
         // ARGUMENTS
         const args_json = try std.json.stringifyAlloc(allocator, ArgsMessage{ .args = args }, .{});
@@ -158,9 +157,9 @@ test "can spawn instance when none running" {
     std.debug.print("\n>> can spawn instance when none running\n", .{});
     const allocator = std.testing.allocator;
 
-    const unix_socket_path = try testSocketFilePath(allocator);
-    const instance_exe_path = try testInstanceExecutablePath(allocator);
-    var args = try TestArguments.init(allocator);
+    const unix_socket_path = testSocketFilePath(allocator);
+    const instance_exe_path = testInstanceExecutablePath(allocator);
+    var args = TestArguments.init(allocator);
     defer allocator.free(unix_socket_path);
     defer allocator.free(instance_exe_path);
     defer args.deinit();
@@ -172,9 +171,9 @@ test "can send arguments to running instance" {
     std.debug.print("\n>> can send arguments to running instance\n", .{});
     const allocator = std.testing.allocator;
 
-    const unix_socket_path = try testSocketFilePath(allocator);
+    const unix_socket_path = testSocketFilePath(allocator);
     const instance_exe_path = try std.fmt.allocPrint(allocator, "NOPE", .{});
-    var args = try TestArguments.init(allocator);
+    var args = TestArguments.init(allocator);
     defer allocator.free(unix_socket_path);
     defer allocator.free(instance_exe_path);
     defer args.deinit();
@@ -202,14 +201,14 @@ test "can send arguments to running instance" {
 }
 
 // $CWD/zig-out/test/{random}
-fn testSocketFilePath(allocator: std.mem.Allocator) ![]u8 {
-    const base_dir_path = try testBaseDirPath(allocator);
+fn testSocketFilePath(allocator: std.mem.Allocator) []u8 {
+    const base_dir_path = testBaseDirPath(allocator);
     defer allocator.free(base_dir_path);
     const number = std.crypto.random.int(u8);
     // path must be as short as possible to prevent NameTooLong errors
-    const name = try std.fmt.allocPrint(allocator, "af_{d}", .{number});
+    const name = std.fmt.allocPrint(allocator, "af_{d}", .{number}) catch unreachable;
     defer allocator.free(name);
-    const unix_socket_path = try std.fs.path.resolve(allocator, &.{ base_dir_path, name });
+    const unix_socket_path = std.fs.path.resolve(allocator, &.{ base_dir_path, name }) catch unreachable;
     std.fs.deleteFileAbsolute(unix_socket_path) catch |err| switch (err) {
         else => {},
     };
@@ -218,38 +217,38 @@ fn testSocketFilePath(allocator: std.mem.Allocator) ![]u8 {
 }
 
 // $CWD/zig-out/test/{instance_exe_name}
-fn testInstanceExecutablePath(allocator: std.mem.Allocator) ![]u8 {
+fn testInstanceExecutablePath(allocator: std.mem.Allocator) []u8 {
 
     // CWD
-    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const cwd_path = std.fs.cwd().realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(cwd_path);
 
     // $CWD/test/
-    const test_dir_path = try std.fs.path.resolve(allocator, &.{ cwd_path, "test" });
+    const test_dir_path = std.fs.path.resolve(allocator, &.{ cwd_path, "test" }) catch unreachable;
     defer allocator.free(test_dir_path);
 
     // $CWD/test/{exe_name}
     const exe_name = if (builtin.target.os.tag == .windows) "test_executable.bat" else "test_executable.sh";
-    const test_exe_path = try std.fs.path.resolve(allocator, &.{ test_dir_path, exe_name });
+    const test_exe_path = std.fs.path.resolve(allocator, &.{ test_dir_path, exe_name }) catch unreachable;
 
     return test_exe_path;
 }
 
-fn testBaseDirPath(allocator: std.mem.Allocator) ![]u8 {
+fn testBaseDirPath(allocator: std.mem.Allocator) []u8 {
 
     // CWD
-    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    const cwd_path = std.fs.cwd().realpathAlloc(allocator, ".") catch unreachable;
     defer allocator.free(cwd_path);
 
     // $CWD/zig-out/
-    const zig_out_dir_path = try std.fs.path.resolve(allocator, &.{ cwd_path, "zig-out" });
+    const zig_out_dir_path = std.fs.path.resolve(allocator, &.{ cwd_path, "zig-out" }) catch unreachable;
     defer allocator.free(zig_out_dir_path);
     std.fs.makeDirAbsolute(zig_out_dir_path) catch |err| switch (err) {
         else => {},
     };
 
     // $CWD/zig-out/test/
-    const test_dir_path = try std.fs.path.resolve(allocator, &.{ zig_out_dir_path, "test" });
+    const test_dir_path = std.fs.path.resolve(allocator, &.{ zig_out_dir_path, "test" }) catch unreachable;
     std.fs.makeDirAbsolute(test_dir_path) catch |err| switch (err) {
         else => {},
     };
@@ -260,11 +259,11 @@ fn testBaseDirPath(allocator: std.mem.Allocator) ![]u8 {
 const TestArguments = struct {
     list: std.ArrayList([]u8),
     allocator: std.mem.Allocator,
-    pub fn init(allocator: std.mem.Allocator) !TestArguments {
+    pub fn init(allocator: std.mem.Allocator) TestArguments {
         var args_list = std.ArrayList([]u8).init(allocator);
-        try args_list.append(try std.fmt.allocPrint(allocator, "foo", .{}));
-        try args_list.append(try std.fmt.allocPrint(allocator, "bar", .{}));
-        try args_list.append(try std.fmt.allocPrint(allocator, "baz", .{}));
+        args_list.append(std.fmt.allocPrint(allocator, "foo", .{}) catch unreachable) catch unreachable;
+        args_list.append(std.fmt.allocPrint(allocator, "bar", .{}) catch unreachable) catch unreachable;
+        args_list.append(std.fmt.allocPrint(allocator, "baz", .{}) catch unreachable) catch unreachable;
         return .{ .list = args_list, .allocator = allocator };
     }
     pub fn deinit(self: *TestArguments) void {
@@ -294,17 +293,17 @@ const TestServerState = struct {
         self.received_messages.deinit();
     }
 
-    pub fn appendMessage(self: *TestServerState, message: []const u8) !void {
-        try self.received_messages.append(message);
+    pub fn appendMessage(self: *TestServerState, message: []const u8) void {
+        self.received_messages.append(message) catch unreachable;
     }
 };
 
-fn startTestServer(allocator: std.mem.Allocator, unix_socket_path: []u8, server_state: *TestServerState) !void {
+fn startTestServer(allocator: std.mem.Allocator, unix_socket_path: []u8, server_state: *TestServerState) void {
     std.debug.print("Starting test server at {s}\n", .{unix_socket_path});
 
     // Bind server
-    const address = try std.net.Address.initUnix(unix_socket_path);
-    var server = try address.listen(std.net.Address.ListenOptions{});
+    const address = std.net.Address.initUnix(unix_socket_path) catch unreachable;
+    var server = address.listen(std.net.Address.ListenOptions{}) catch unreachable;
     defer server.deinit();
 
     // Server is listening
@@ -312,29 +311,31 @@ fn startTestServer(allocator: std.mem.Allocator, unix_socket_path: []u8, server_
     server_state.wait_group.finish();
 
     // Wait for client
-    const connection = try server.accept();
+    const connection = server.accept() catch unreachable;
 
     // Server receives HELLO
-    const hello_message = try connection.stream.reader().readUntilDelimiterAlloc(allocator, TERMINATOR_CHAR, JSON_MAX_SIZE);
+    const hello_message = connection.stream.reader().readUntilDelimiterAlloc(allocator, TERMINATOR_CHAR, JSON_MAX_SIZE) catch unreachable;
     std.debug.print("Server received: {s}\n", .{hello_message});
-    try server_state.appendMessage(hello_message);
+    server_state.appendMessage(hello_message);
 
     if (std.mem.eql(u8, hello_message, HELLO_MESSAGE)) {
-        std.debug.print("Server got {s}\n", .{hello_message});
 
         // Server sends READY
-        _ = try connection.stream.writeAll(READY_MESSAGE);
-        _ = try connection.stream.writeAll(TERMINATOR_STRING);
+        _ = connection.stream.writeAll(READY_MESSAGE) catch unreachable;
+        _ = connection.stream.writeAll(TERMINATOR_STRING) catch unreachable;
+        std.debug.print("Server sent: {s}\n", .{READY_MESSAGE});
 
         // Server receives ARGUMENTS
-        const args_message = try connection.stream.reader().readUntilDelimiterAlloc(allocator, TERMINATOR_CHAR, JSON_MAX_SIZE);
+        const args_message = connection.stream.reader().readUntilDelimiterAlloc(allocator, TERMINATOR_CHAR, JSON_MAX_SIZE) catch unreachable;
         std.debug.print("Server received: {s}\n", .{args_message});
-        try server_state.appendMessage(args_message);
+        server_state.appendMessage(args_message);
 
         // Server sends OK
-        _ = try connection.stream.writeAll(OK_MESSAGE);
-        _ = try connection.stream.writeAll(TERMINATOR_STRING);
+        _ = connection.stream.writeAll(OK_MESSAGE) catch unreachable;
+        _ = connection.stream.writeAll(TERMINATOR_STRING) catch unreachable;
+        std.debug.print("Server sent: {s}\n", .{OK_MESSAGE});
     } else {
         std.debug.print("Server expected HELLO, received garbage", .{});
+        unreachable;
     }
 }
