@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) !void {
     const release = b.step("release", "Build release executable for all targets");
     for (TARGETS) |t| {
         const exe = b.addExecutable(.{
-            .name = "my-launcher",
+            .name = "launcher",
             .root_source_file = b.path("src/main.zig"),
             .target = b.resolveTargetQuery(t),
             .optimize = .ReleaseSmall,
@@ -53,7 +53,7 @@ pub fn build(b: *std.Build) !void {
     // This creates another `std.Build.Step.Compile`, but this one builds an executable
     // rather than a static library.
     const main_exe = b.addExecutable(.{
-        .name = "my-launcher-debug",
+        .name = "launcher-debug",
         .root_module = main_module,
     });
 
@@ -116,5 +116,6 @@ const TARGETS: []const std.Target.Query = &.{
     // .{ .cpu_arch = .aarch64, .os_tag = .linux },
     .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
     // .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl },
+    // .{ .cpu_arch = .aarch64, .os_tag = .windows, .os_version_min = .{ .windows = .win10_rs4 } },
     .{ .cpu_arch = .x86_64, .os_tag = .windows, .os_version_min = .{ .windows = .win10_rs4 } },
 };
