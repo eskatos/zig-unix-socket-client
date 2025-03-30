@@ -24,10 +24,10 @@ sequenceDiagram
     alt NOT RUNNING
         L->>A: Launches ["arg", "uments"]
     else RUNNING UNIX SOCKET
-        L-->>A: {"msg": "HELLO"}
-        A-->>L: {"msg": "READY"}
-        L-->>A: {"args": ["arg", "uments"]}
-        A-->>L: {"msg": "OK"}
+        L-->>A: {"msg":"HELLO"}
+        A-->>L: {"msg":"READY"}
+        L-->>A: {"args":["arg","uments"]}
+        A-->>L: {"msg":"OK"}
     end
 ```
 
