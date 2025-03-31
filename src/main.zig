@@ -26,6 +26,7 @@ const JSON_MAX_SIZE: usize = 65536;
 const LauncherError = error{
     UnknownReadyMessage,
     UnknownOkMessage,
+    UnableToSpawnInstance,
 };
 
 pub fn main() void {
@@ -40,7 +41,14 @@ pub fn main() void {
     if (launcher(allocator, path_info.socket_path, path_info.instance_exe_path, path_info.args_list.items)) {
         std.process.exit(0);
     } else |err| {
-        std.debug.print("{s}, aborting!", .{@errorName(err)});
+        switch (err) {
+            LauncherError.UnknownReadyMessage => {},
+            LauncherError.UnknownOkMessage => {},
+            LauncherError.UnableToSpawnInstance => {},
+            else => {
+                std.debug.print("Unexpected {s}, aborting!\n", .{@errorName(err)});
+            },
+        }
         std.process.exit(1);
     }
 }
@@ -145,9 +153,11 @@ fn sendArgumentsToRunningInstance(allocator: std.mem.Allocator, args: [][]u8, st
             if (debug) std.debug.print("Server OK'ed arguments\n", .{});
             return;
         } else {
+            std.debug.print("Received unknown OK message!\nExpected '{s}' but got '{s}'\n", .{ OK_MESSAGE, ok_server });
             return LauncherError.UnknownOkMessage;
         }
     } else {
+        std.debug.print("Received unknown READY message!\nExpected '{s}' but got '{s}'\n", .{ READY_MESSAGE, ready_server });
         return LauncherError.UnknownReadyMessage;
     }
 }
@@ -168,12 +178,12 @@ fn runInstanceExecutable(allocator: std.mem.Allocator, instance_exe_path: []u8, 
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
     child.spawn() catch |err| {
-        if (debug) std.debug.print("Unable to spawn! {s}\n", .{argv_debug});
-        return err;
+        std.debug.print("Unable to spawn instance!\n{s}: {s}\n", .{ @errorName(err), argv_debug });
+        return LauncherError.UnableToSpawnInstance;
     };
     child.waitForSpawn() catch |err| {
-        if (debug) std.debug.print("Unable to wait for spawn! {s}\n", .{argv_debug});
-        return err;
+        std.debug.print("Unable to wait for spawned instance!\n{s}: {s}\n", .{ @errorName(err), argv_debug });
+        return LauncherError.UnableToSpawnInstance;
     };
     if (debug) std.debug.print("Spawned! {s}\n", .{argv_debug});
 }
