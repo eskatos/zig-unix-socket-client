@@ -120,9 +120,9 @@ pub fn build(b: *std.Build) !void {
 const TARGETS: []const std.Target.Query = &.{
     // .{ .cpu_arch = .aarch64, .os_tag = .macos },
     // .{ .cpu_arch = .x86_64, .os_tag = .macos },
-    // .{ .cpu_arch = .aarch64, .os_tag = .linux },
+    .{ .cpu_arch = .aarch64, .os_tag = .linux },
     .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu },
-    // .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl },
-    // .{ .cpu_arch = .aarch64, .os_tag = .windows, .os_version_min = .{ .windows = .win10_rs4 } },
+    .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl },
+    .{ .cpu_arch = .aarch64, .os_tag = .windows, .os_version_min = .{ .windows = .win10_rs4 } },
     .{ .cpu_arch = .x86_64, .os_tag = .windows, .os_version_min = .{ .windows = .win10_rs4 } },
 };
