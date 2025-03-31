@@ -105,16 +105,6 @@ pub fn build(b: *std.Build) !void {
     test_step.dependOn(&run_exe_unit_tests.step);
 
     check_step.dependOn(test_step);
-
-    // Code coverage
-    // TODO this requires kcov on $PATH
-    const cov_run = b.addSystemCommand(&.{ "kcov", "--clean", "--include-pattern=src/", "zig-out/kcov/" });
-    cov_run.addArtifactArg(main_unit_tests);
-
-    const cov_step = b.step("cov", "Generate code coverage");
-    cov_step.dependOn(&cov_run.step);
-
-    check_step.dependOn(cov_step);
 }
 
 const TARGETS: []const std.Target.Query = &.{
